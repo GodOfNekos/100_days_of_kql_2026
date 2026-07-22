@@ -1,0 +1,49 @@
+// Day 1 - Potential ClickFix-Style Command Execution
+// Identifies suspicious command interpreters launched from Windows Explorer.
+
+let Lookback = 7d;
+let CommandInterpreters = dynamic([
+    "powershell.exe",
+    "pwsh.exe",
+    "cmd.exe",
+    "mshta.exe",
+    "wscript.exe",
+    "cscript.exe",
+    "rundll32.exe"
+]);
+let SuspiciousCommandTerms = dynamic([
+    "http://",
+    "https://",
+    "-enc",
+    "-encodedcommand",
+    "frombase64string",
+    "downloadstring",
+    "downloadfile",
+    "invoke-expression",
+    "invoke-webrequest",
+    "start-bitstransfer",
+    "javascript:",
+    "vbscript:",
+    "certutil",
+    "bitsadmin"
+]);
+DeviceProcessEvents
+| where Timestamp > ago(Lookback)
+| where InitiatingProcessFileName =~ "explorer.exe"
+| where FileName in~ (CommandInterpreters)
+| where ProcessCommandLine has_any (SuspiciousCommandTerms)
+| project
+    Timestamp,
+    DeviceName,
+    AccountName,
+    FileName,
+    ProcessCommandLine,
+    FolderPath,
+    SHA1,
+    ProcessId,
+    ProcessUniqueId,
+    InitiatingProcessFileName,
+    InitiatingProcessCommandLine,
+    InitiatingProcessId,
+    InitiatingProcessUniqueId
+| order by Timestamp desc
