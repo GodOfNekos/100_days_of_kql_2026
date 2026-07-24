@@ -1,0 +1,59 @@
+// Day 3 - Suspicious PowerShell Download Commands
+// Identifies PowerShell command lines containing common
+// download methods or references to remote web content.
+
+let Lookback = 7d;
+
+let DownloadTerms = dynamic([
+    "invoke-webrequest",
+    "invoke-restmethod",
+    "downloadstring",
+    "downloadfile",
+    "start-bitstransfer",
+    "system.net.webclient",
+    "curl",
+    "wget"
+]);
+
+DeviceProcessEvents
+| where Timestamp >= ago(Lookback)
+| where FileName in~ (
+    "powershell.exe",
+    "pwsh.exe",
+    "powershell_ise.exe"
+)
+| where ProcessCommandLine has_any (DownloadTerms)
+    or ProcessCommandLine contains "http://"
+    or ProcessCommandLine contains "https://"
+| extend DownloadMethod = case(
+    ProcessCommandLine has_any ("invoke-webrequest", "iwr"),
+        "Invoke-WebRequest",
+    ProcessCommandLine has_any ("invoke-restmethod", "irm"),
+        "Invoke-RestMethod",
+    ProcessCommandLine contains "downloadstring",
+        "DownloadString",
+    ProcessCommandLine contains "downloadfile",
+        "DownloadFile",
+    ProcessCommandLine contains "start-bitstransfer",
+        "BITS Transfer",
+    ProcessCommandLine contains "system.net.webclient",
+        "WebClient",
+    ProcessCommandLine has_any ("curl", "wget"),
+        "Command-Line Web Client",
+    "Remote URL Reference"
+)
+| project
+    Timestamp,
+    DeviceName,
+    AccountName,
+    InitiatingProcessFileName,
+    FileName,
+    DownloadMethod,
+    ProcessCommandLine,
+    FolderPath,
+    SHA1,
+    ProcessId,
+    ProcessUniqueId,
+    DeviceId,
+    ReportId
+| order by Timestamp desc
