@@ -656,6 +656,22 @@ The following resources may be used throughout the project:
 - [Kusto Query Language Documentation](https://learn.microsoft.com/en-us/kusto/query/)
 
 ---
+# Linked 100 Days of KQL Repositories
+
+The following repositories are also participating in, or providing material for, the **100 Days of KQL** initiative:
+
+- [m4nbat — 100 Days of KQL 2026](https://github.com/m4nbat/100_days_of_kql_2026)
+- [Jiayang-Lai — 100 Days of KQL](https://github.com/Jiayang-Lai/100-Days-of-KQL)
+- [faslam1994 — 100 Days of KQL](https://github.com/faslam1994/100_days_of_kql)
+- [JoshuaJapes — 100 Days of KQL](https://github.com/JoshuaJapes/100_days_of_kql)
+- [tom564 — 100 Days KQL 2026](https://github.com/tom564/100_days_kql_2026)
+- [TiiTcHY — 100 Days of KQL](https://github.com/TiiTcHY/100_Days_of_KQL/tree/main)
+- [AtlSs3c — 100 Days of KQL](https://github.com/AtlSs3c/100_Days_Of_KQL_2016)
+- [DazOneZero — 100 Days of KQL 2026](https://github.com/DazOneZero/100_days_of_kql_2026)
+
+These repositories provide additional queries, approaches and perspectives from other participants completing the challenge.
+
+---
 
 # Disclaimer
 
@@ -664,4 +680,3 @@ The queries in this repository are intended for threat hunting, research and edu
 They should be tested and tuned against the target environment before being used as production detections.
 
 A query result does not by itself confirm malicious activity.
-````
