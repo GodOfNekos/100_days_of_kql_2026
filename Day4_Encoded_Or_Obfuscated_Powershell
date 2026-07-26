@@ -1,0 +1,309 @@
+# Day 4 — Encoded or Obfuscated PowerShell Execution
+
+Day 4 continues the PowerShell focus from Day 3 by looking for commands that may be attempting to conceal their true purpose.
+
+This remains a single-table query using `DeviceProcessEvents`, but introduces regular-expression extraction and simple categorisation of different obfuscation methods.
+
+---
+
+## Objective
+
+Identify PowerShell processes using encoded commands or command-line elements commonly associated with obfuscation.
+
+Examples may include:
+
+```powershell
+powershell.exe -EncodedCommand SQBFAFgA...
+```
+
+```powershell
+pwsh.exe -ec SQBFAFgA...
+```
+
+```powershell
+powershell.exe -Command IEX(...)
+```
+
+```powershell
+powershell.exe -Command [Convert]::FromBase64String(...)
+```
+
+PowerShell encoding and obfuscation can be used to conceal malicious commands from users, analysts and basic security controls.
+
+However, encoded PowerShell is not automatically malicious and may also be used by legitimate administration, automation or security tools.
+
+---
+
+## Data Source
+
+This query uses:
+
+- `DeviceProcessEvents`
+
+The table contains process creation and command-line telemetry from Microsoft Defender for Endpoint.
+
+---
+
+## MITRE ATT&CK
+
+- **T1059.001 — Command and Scripting Interpreter: PowerShell**
+- **T1027 — Obfuscated Files or Information**
+
+---
+
+## KQL Concepts
+
+Day 4 introduces or reinforces:
+
+- `let`
+- `dynamic`
+- `where`
+- `in~`
+- `tolower()`
+- `extract()`
+- `isnotempty()`
+- `has_any`
+- `contains`
+- `extend`
+- `case()`
+- `strlen()`
+- `substring()`
+- `project`
+- `order by`
+
+The main new concept is using `extract()` with a regular expression to identify and extract encoded PowerShell payloads from the command line.
+
+---
+
+## KQL Query
+
+```kql
+// Day 4 - Encoded or Obfuscated PowerShell Execution
+// Identifies PowerShell commands using encoded-command switches
+// or command-line elements commonly associated with obfuscation.
+
+let Lookback = 7d;
+
+let PowerShellProcesses = dynamic([
+    "powershell.exe",
+    "pwsh.exe",
+    "powershell_ise.exe"
+]);
+
+let ObfuscationTerms = dynamic([
+    "frombase64string",
+    "tobase64string",
+    "invoke-expression",
+    "gzipstream",
+    "deflatestream",
+    "bxor"
+]);
+
+DeviceProcessEvents
+| where Timestamp >= ago(Lookback)
+| where FileName in~ (PowerShellProcesses)
+| extend NormalisedCommandLine = tolower(ProcessCommandLine)
+| extend EncodedPayload = extract(
+    @"(?i)(?:^|\s)-(?:e|ec|enc|encodedcommand)\s+([A-Za-z0-9+/=]{20,})",
+    1,
+    ProcessCommandLine
+)
+| extend HasEncodedCommand = isnotempty(EncodedPayload)
+| extend HasObfuscationTerm =
+    NormalisedCommandLine has_any (ObfuscationTerms)
+    or NormalisedCommandLine contains "iex("
+    or NormalisedCommandLine contains "[char]"
+    or NormalisedCommandLine contains "-join"
+| where HasEncodedCommand or HasObfuscationTerm
+| extend ObfuscationMethod = case(
+    HasEncodedCommand and HasObfuscationTerm,
+        "Encoded command with additional obfuscation",
+    HasEncodedCommand,
+        "Encoded PowerShell command",
+    NormalisedCommandLine contains "frombase64string",
+        "Base64 decoding",
+    NormalisedCommandLine contains "iex("
+        or NormalisedCommandLine contains "invoke-expression",
+        "Dynamic expression execution",
+    NormalisedCommandLine contains "gzipstream"
+        or NormalisedCommandLine contains "deflatestream",
+        "Compressed content",
+    NormalisedCommandLine contains "[char]"
+        or NormalisedCommandLine contains "-join",
+        "String reconstruction",
+    NormalisedCommandLine contains "bxor",
+        "XOR transformation",
+    "Other potential obfuscation"
+)
+| extend EncodedPayloadLength = strlen(EncodedPayload)
+| extend EncodedPayloadPreview = substring(EncodedPayload, 0, 120)
+| project
+    Timestamp,
+    DeviceName,
+    AccountName,
+    InitiatingProcessFileName,
+    FileName,
+    ObfuscationMethod,
+    ProcessCommandLine,
+    EncodedPayloadLength,
+    EncodedPayloadPreview,
+    FolderPath,
+    SHA1,
+    ProcessId,
+    ProcessUniqueId,
+    DeviceId,
+    ReportId
+| order by Timestamp desc
+```
+
+---
+
+## How the Query Works
+
+The query first limits the results to recognised PowerShell processes:
+
+```kql
+| where FileName in~ (PowerShellProcesses)
+```
+
+The command line is then converted to lowercase to make later comparisons more consistent:
+
+```kql
+| extend NormalisedCommandLine = tolower(ProcessCommandLine)
+```
+
+The `extract()` function searches for common encoded-command switches:
+
+```text
+-e
+-ec
+-enc
+-encodedcommand
+```
+
+When one of these switches is followed by a Base64-like value, the value is extracted into the `EncodedPayload` column.
+
+The query also searches for terms associated with common PowerShell obfuscation methods, including:
+
+- Base64 conversion
+- Dynamic expression execution
+- Compression
+- Character arrays
+- String joining
+- XOR operations
+
+The `case()` function then assigns a readable category to each result through the `ObfuscationMethod` column.
+
+Finally, the query records the length of any extracted payload and provides a preview of its first 120 characters.
+
+---
+
+## Obfuscation Categories
+
+| Command-line behaviour | Category |
+|---|---|
+| Encoded-command switch | Encoded PowerShell command |
+| Encoded command plus other indicators | Encoded command with additional obfuscation |
+| `FromBase64String` | Base64 decoding |
+| `IEX` or `Invoke-Expression` | Dynamic expression execution |
+| `GZipStream` or `DeflateStream` | Compressed content |
+| `[char]` or `-join` | String reconstruction |
+| `bxor` | XOR transformation |
+| Other matching terms | Other potential obfuscation |
+
+The categories are intended to help analysts understand why each result was returned.
+
+They should not be treated as severity ratings or confirmation of malicious activity.
+
+---
+
+## Expected Results
+
+The query may identify activity such as:
+
+```text
+powershell.exe -EncodedCommand SQBFAFgA...
+```
+
+```text
+pwsh.exe -ec SQBFAFgA...
+```
+
+```text
+powershell.exe -Command IEX(...)
+```
+
+```text
+powershell.exe -Command [Convert]::FromBase64String(...)
+```
+
+```text
+powershell.exe -Command ([char]65,[char]66,[char]67)-join ''
+```
+
+```text
+powershell.exe -Command $Value -bxor 35
+```
+
+Results should be reviewed alongside:
+
+- The parent process
+- The complete command line
+- The user account
+- The device
+- Subsequent child processes
+- Related network and file activity
+
+---
+
+## Potential False Positives
+
+Legitimate results may include:
+
+- Administrative automation
+- Software deployment
+- Device-management platforms
+- Security products
+- Approved maintenance scripts
+- Penetration testing
+- Red-team activity
+- Complex PowerShell scripts using compression or encoding
+
+Known legitimate scripts and command-line patterns may be excluded after they have been reviewed.
+
+---
+
+## Limitations
+
+This query does not prove that an encoded or obfuscated command is malicious.
+
+It may also miss:
+
+- PowerShell launched through a renamed executable
+- Obfuscation techniques not included in the query
+- Obfuscation contained inside a script file
+- Commands where the encoded payload is constructed at runtime
+- Encoded-command abbreviations not covered by the regular expression
+- PowerShell activity without visible process command-line telemetry
+
+The query extracts potential encoded content but does not attempt to decode it.
+
+PowerShell encoded commands are commonly created from Unicode text before being converted to Base64, so decoding them correctly requires the appropriate character encoding.
+
+---
+
+## References
+
+- [Microsoft Defender XDR — DeviceProcessEvents](https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-deviceprocessevents-table)
+- [Microsoft Learn — extract()](https://learn.microsoft.com/en-us/kusto/query/extract-function)
+- [Microsoft Learn — PowerShell Command-Line Interface](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe)
+- [MITRE ATT&CK — T1059.001: PowerShell](https://attack.mitre.org/techniques/T1059/001/)
+- [MITRE ATT&CK — T1027: Obfuscated Files or Information](https://attack.mitre.org/techniques/T1027/)
+
+---
+
+## Disclaimer
+
+This query is intended for threat hunting, research and educational use.
+
+It should be tested and tuned against the target environment before being used as a production detection.
