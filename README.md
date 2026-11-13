@@ -116,9 +116,11 @@ Planned and potential topics include:
 5. Suspicious Windows script-host activity
 6. Execution from temporary directories
 7. Execution from user-writable locations
-8. Renamed Windows system utilities
-9. Rare parent-child process relationships
-10. Unusual process execution across the environment
+8. Email links opened without Safe Links
+9. Safe Links coverage review
+10. Renamed Windows system utilities
+
+Days 8 and 9 were brought forward from the email section because the scenario was relevant to my work. Rare parent-child process relationships and unusual process execution across the environment move to the start of Days 11-20.
 
 KQL concepts introduced during this section may include:
 
@@ -150,6 +152,8 @@ This section will examine how legitimate Windows utilities can be abused for exe
 
 Potential topics include:
 
+- Rare parent-child process relationships (moved from Days 1-10)
+- Unusual process execution across the environment (moved from Days 1-10)
 - `rundll32.exe`
 - `regsvr32.exe`
 - `mshta.exe`
